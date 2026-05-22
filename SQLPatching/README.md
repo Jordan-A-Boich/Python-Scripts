@@ -1,5 +1,5 @@
 SQL Server Patch Monitor
-> ## ⚠️ Disclaimer
+> ## Disclaimer
 >
 > This script is provided **"as is", without warranty of any kind**, express or
 > implied. It downloads files from third‑party and Microsoft websites and writes
@@ -30,7 +30,7 @@ nothing is re‑downloaded if it's already present and valid.
 Prerequisites
 Python 3.10 or newer.
 Windows: `winget install Python.Python.3.12` or the installer from
-python.org — tick "Add python.exe to
+python.org tick "Add python.exe to
 PATH" during install.
 Verify in a new terminal: `python --version`
 Internet access from the machine to:
