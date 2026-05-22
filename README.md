@@ -1,6 +1,7 @@
 Utility Scripts
-A public collection of my personal utility and automation scripts — primarily
-PowerShell, with the occasional Python tool. They're shared in case they're
+
+
+A public collection of my personal Python utility scripts. They're shared in case they're
 useful to others. Each script (or script folder) generally has its own README
 or header comments explaining what it does and how to run it.
 ---
