@@ -99,6 +99,11 @@ RETRY_BACKOFF = 5  # initial backoff seconds, doubles each retry: 5 -> 10 -> 20
 # Downloaded files smaller than this are treated as corrupt.
 MIN_VALID_SIZE_MB = 50
 
+# Maximum number of "fixes" / "known issue" lines copied from a KB article into
+# INSTALL_ORDER.txt. Keeps the file readable; the full list stays in the article.
+MAX_FIX_LINES = 300
+MAX_KNOWN_LINES = 60
+
 # Per-supported-version metadata. Build prefix is used to validate that we are
 # reading the correct table and that a resolved file matches the version.
 VERSION_INFO: dict[str, dict[str, str]] = {
@@ -170,6 +175,10 @@ class ResolvedPatch:
     drift_note: str = ""
     skipped: bool = False
     skip_reason: str = ""
+    fixes: list[str] = field(default_factory=list)
+    known_issues: list[str] = field(default_factory=list)
+    notes_url: str | None = None
+    notes_error: str = ""
 
 
 @dataclass
@@ -939,8 +948,140 @@ def process_gdr(ctx: RunContext, gdr: TargetPatch, cu_result: ResolvedPatch) -> 
 
 
 # --------------------------------------------------------------------------- #
+# Patch notes (what the patch fixes + known issues) from the KB article
+# --------------------------------------------------------------------------- #
+
+# Headings on the KB article that introduce the relevant sections. Matched
+# case-insensitively as substrings of the heading text.
+_FIX_HEADING_KEYS = (
+    "improvements and fixes",
+    "fixes that are included",
+    "fixes included in this update",
+    "bugs that are fixed",
+    "list of fixes",
+    "summary of the fixes",
+)
+_KNOWN_HEADING_KEYS = ("known issue",)
+_HEADING_RE = re.compile(r"^h[1-6]$")
+
+
+def _collect_section(start_heading) -> list[str]:
+    """Collect text from rows/list-items/paragraphs that follow a heading.
+
+    Stops at the next heading of the same or higher level so we only capture
+    the one section. Tables (the typical "fixes" layout) yield one line per row;
+    prose/known-issue sections yield one line per paragraph or list item.
+    """
+    start_level = int(start_heading.name[1])
+    out: list[str] = []
+    seen: set[str] = set()
+    for el in start_heading.find_all_next():
+        if el.name and _HEADING_RE.fullmatch(el.name):
+            if int(el.name[1]) <= start_level:
+                break
+            continue
+        if el.name == "tr":
+            cells = el.find_all(["td", "th"])
+            text = " | ".join(
+                c.get_text(" ", strip=True) for c in cells if c.get_text(strip=True)
+            )
+        elif el.name in ("li", "p"):
+            # Skip a <p>/<li> that only wraps a table we already capture by row.
+            if el.find(["tr", "table"]):
+                continue
+            text = el.get_text(" ", strip=True)
+        else:
+            continue
+        text = text.strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+    return out
+
+
+def _extract_section(soup: BeautifulSoup, keys: tuple[str, ...], cap: int) -> list[str]:
+    for heading in soup.find_all(_HEADING_RE):
+        htext = heading.get_text(" ", strip=True).lower()
+        if any(k in htext for k in keys):
+            items = _collect_section(heading)
+            if items:
+                if len(items) > cap:
+                    hidden = len(items) - cap
+                    items = items[:cap] + [
+                        f"... ({hidden} more not shown — see the full KB article)"
+                    ]
+                return items
+    return []
+
+
+def fetch_patch_notes(ctx: RunContext, kb: str) -> tuple[list[str], list[str], str | None, str]:
+    """Fetch a patch's KB article and extract fixes and known issues.
+
+    Returns (fixes, known_issues, source_url, error). Failures are returned as a
+    non-empty error string rather than raised — patch notes are informational
+    and must never abort a run.
+    """
+    url = SUPPORT_ARTICLE_URL.format(kb=re.sub(r"\D", "", kb))
+    try:
+        resp = http_get(ctx.session, url)
+        if resp is None:
+            return [], [], url, "Could not retrieve the KB article (request failed)."
+        soup = BeautifulSoup(resp.text, "lxml")
+        fixes = _extract_section(soup, _FIX_HEADING_KEYS, MAX_FIX_LINES)
+        known = _extract_section(soup, _KNOWN_HEADING_KEYS, MAX_KNOWN_LINES)
+        source = getattr(resp, "url", url) or url
+        return fixes, known, source, ""
+    except Exception as exc:  # noqa: BLE001 — notes are best-effort
+        return [], [], url, f"Could not parse the KB article: {exc}"
+
+
+def attach_patch_notes(ctx: RunContext, result: ResolvedPatch | None) -> None:
+    if result is None or result.skipped:
+        return
+    kb = result.resolved_kb or result.target.kb
+    log.info("Fetching patch notes (fixes / known issues) for %s ...", kb)
+    fixes, known, url, err = fetch_patch_notes(ctx, kb)
+    result.fixes = fixes
+    result.known_issues = known
+    result.notes_url = url
+    result.notes_error = err
+    if err:
+        log.warning("Patch notes for %s unavailable: %s", kb, err)
+    else:
+        log.info("Patch notes for %s: %d fix lines, %d known-issue lines.",
+                 kb, len(fixes), len(known))
+
+
+# --------------------------------------------------------------------------- #
 # INSTALL_ORDER.txt
 # --------------------------------------------------------------------------- #
+
+
+def _append_patch_notes(lines: list[str], result: ResolvedPatch) -> None:
+    """Render the 'what it fixes' and 'known issues' blocks for a patch so a DBA
+    can review impact before installing."""
+    if result.notes_url:
+        lines.append(f"  KB article   : {result.notes_url}")
+    if result.notes_error:
+        lines.append(f"  Patch notes  : {result.notes_error}")
+        lines.append("  Review the KB article manually before installing.")
+        return
+
+    lines.append("")
+    lines.append("  WHAT THIS PATCH FIXES:")
+    if result.fixes:
+        for item in result.fixes:
+            lines.append(f"    - {item}")
+    else:
+        lines.append("    (No fixes/improvements section found in the KB article — review it manually.)")
+
+    lines.append("")
+    lines.append("  KNOWN ISSUES WITH THIS PATCH:")
+    if result.known_issues:
+        for item in result.known_issues:
+            lines.append(f"    - {item}")
+    else:
+        lines.append("    (No known-issues section found in the KB article — review it manually.)")
 
 
 def write_install_order(
@@ -979,6 +1120,7 @@ def write_install_order(
         lines.append(f"  Release date : {cu.release_date or 'unknown'}")
         lines.append(f"  Description  : {cu.description}")
         lines.append(f"  File         : {cu_result.file_path}")
+        _append_patch_notes(lines, cu_result)
     elif cu_result and cu_result.skipped:
         lines.append(f"  NOT AVAILABLE: {cu_result.skip_reason}")
     else:
@@ -996,6 +1138,7 @@ def write_install_order(
         lines.append(f"  Release date : {gdr.release_date or 'unknown'}")
         lines.append(f"  Description  : {gdr.description}")
         lines.append(f"  File         : {gdr_result.file_path}")
+        _append_patch_notes(lines, gdr_result)
     elif gdr_result and gdr_result.skipped:
         lines.append(f"  No Security Update applied: {gdr_result.skip_reason}")
     else:
@@ -1058,6 +1201,10 @@ def run(ctx: RunContext) -> int:
             cleanup_old_folders(ctx, keep)
         else:
             log.warning("No patches downloaded successfully; skipping cleanup.")
+
+    # Pull each patch's fixes / known issues from its KB article for the DBA.
+    attach_patch_notes(ctx, cu_result)
+    attach_patch_notes(ctx, gdr_result)
 
     write_install_order(ctx, cu_result, gdr_result)
 
