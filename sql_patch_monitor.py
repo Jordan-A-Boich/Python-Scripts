@@ -352,7 +352,9 @@ def http_post(
 # --------------------------------------------------------------------------- #
 
 _BUILD_RE = re.compile(r"\b(\d{2}\.\d+\.\d+\.\d+)\b")
-_KB_RE = re.compile(r"\bKB\s*?(\d{6,7})\b", re.IGNORECASE)
+# The build reference lists KB numbers as bare digits (e.g. "5074819"); the
+# "KB" prefix is optional. SQL Server KB numbers are 7 digits.
+_KB_RE = re.compile(r"\b(?:KB\s*)?(\d{7})\b", re.IGNORECASE)
 _CU_RE = re.compile(r"\bCU\s*?(\d+)\b", re.IGNORECASE)
 _CU_LONG_RE = re.compile(r"cumulative\s+update\s+(\d+)", re.IGNORECASE)
 _DATE_RE = re.compile(
@@ -393,11 +395,13 @@ def _parse_row(cells_text: str, row, build_prefix: str) -> PatchRow | None:
 
     withdrawn = "withdrawn" in lowered
 
-    build_match = _BUILD_RE.search(cells_text)
-    build = build_match.group(1) if build_match else None
-    # Only accept builds belonging to this SQL Server version.
-    if build and not build.startswith(build_prefix + "."):
-        build = None
+    # A row may list several build representations (e.g. 16.0.x, 16.00.x,
+    # 2022.160.x). Pick the one belonging to this SQL Server version.
+    build = None
+    for candidate in _BUILD_RE.findall(cells_text):
+        if candidate.startswith(build_prefix + "."):
+            build = candidate
+            break
 
     kb_match = _KB_RE.search(cells_text)
     kb = f"KB{kb_match.group(1)}" if kb_match else None
