@@ -5,13 +5,13 @@ A public collection of my personal Python utility scripts. They're shared in cas
 useful to others. Each script (or script folder) generally has its own README
 or header comments explaining what it does and how to run it.
 ---
-Disclaimer — read before running anything
+Disclaimer: Read before running anything
 These scripts are provided "as is", without warranty of any kind, express or
 implied, including but not limited to warranties of merchantability or fitness
 for a particular purpose.
 You run them entirely at your own risk. I accept no responsibility or
 liability whatsoever for any damage, data loss, downtime, security exposure,
-broken environments, or any other adverse outcome — direct or indirect —
+broken environments, or any other adverse outcome, direct or indirect,
 resulting from the use, misuse, or inability to use anything in this repository.
 These are utilities I've written for my own purposes. They may make changes to
 your filesystem, download files, modify configuration, or interact with remote
@@ -21,8 +21,8 @@ environment.
 Please test in isolation first
 Before running any script here against systems you care about:
 Read the script. Understand exactly what it does before you execute it.
-Test in an isolated, non‑production environment — a sandbox, lab, VM, or
-throwaway machine — that mirrors your setup as closely as possible.
+Test in an isolated, non production environment like a sandbox, lab, VM, or
+throwaway machine that mirrors your setup as closely as possible.
 Validate the results before relying on them anywhere important.
 Never run anything in production until you have confirmed it behaves
 exactly as you expect.
